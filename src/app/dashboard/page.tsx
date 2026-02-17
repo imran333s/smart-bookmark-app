@@ -26,6 +26,8 @@ export default function Dashboard() {
     const router = useRouter()
     const [supabase] = useState(() => createClient())
 
+    const [hasFetched, setHasFetched] = useState(false)
+
     const fetchBookmarks = useCallback(async () => {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) {
@@ -38,34 +40,47 @@ export default function Dashboard() {
             .select('*')
             .order('created_at', { ascending: false })
 
-        if (error) console.error('Error fetching bookmarks:', error)
-        else setBookmarks(data || [])
+        if (error) {
+            console.error('Error fetching bookmarks:', error)
+        } else {
+            setBookmarks(data || [])
+            setHasFetched(true)
+        }
         setLoading(false)
     }, [supabase, router])
 
     useEffect(() => {
-        fetchBookmarks()
-
+        // 1. Setup the listener first
+        const channelName = `db-changes-${Math.random().toString(36).slice(2)}`
         const channel = supabase
-            .channel('realtime bookmarks')
+            .channel(channelName)
             .on('postgres_changes', {
                 event: '*',
                 schema: 'public',
                 table: 'bookmarks'
             }, (payload) => {
+                console.log('Realtime event:', payload.eventType, payload)
+
                 if (payload.eventType === 'INSERT') {
+                    const newBookmark = payload.new as Bookmark
                     setBookmarks((prev) => {
-                        // Avoid duplicates if optimistic update already ran
-                        if (prev.some(b => b.id === payload.new.id)) return prev
-                        return [payload.new as Bookmark, ...prev]
+                        if (prev.some(b => b.id === newBookmark.id)) return prev
+                        return [newBookmark, ...prev]
                     })
                 } else if (payload.eventType === 'DELETE') {
                     setBookmarks((prev) => prev.filter((b) => b.id !== payload.old.id))
                 } else if (payload.eventType === 'UPDATE') {
-                    setBookmarks((prev) => prev.map((b) => (b.id === payload.new.id ? (payload.new as Bookmark) : b)))
+                    const updated = payload.new as Bookmark
+                    setBookmarks((prev) => prev.map((b) => (b.id === updated.id ? updated : b)))
                 }
             })
-            .subscribe()
+            .subscribe((status) => {
+                console.log('Realtime status:', status)
+                if (status === 'SUBSCRIBED') {
+                    // 2. Only fetch initial data AFTER we are listening for changes
+                    fetchBookmarks()
+                }
+            })
 
         return () => {
             supabase.removeChannel(channel)
