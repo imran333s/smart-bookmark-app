@@ -49,35 +49,41 @@ export default function Dashboard() {
         setLoading(false)
     }, [supabase, router])
 
+    const [realtimeStatus, setRealtimeStatus] = useState<'CONNECTING' | 'CONNECTED' | 'DISCONNECTED'>('CONNECTING')
+
     useEffect(() => {
-        // 1. Setup the listener first
-        const channelName = `db-changes-${Math.random().toString(36).slice(2)}`
         const channel = supabase
-            .channel(channelName)
+            .channel('bookmarks-global-sync')
             .on('postgres_changes', {
-                event: '*',
+                event: 'INSERT',
                 schema: 'public',
                 table: 'bookmarks'
             }, (payload) => {
-                console.log('Realtime event:', payload.eventType, payload)
-
-                if (payload.eventType === 'INSERT') {
-                    const newBookmark = payload.new as Bookmark
-                    setBookmarks((prev) => {
-                        if (prev.some(b => b.id === newBookmark.id)) return prev
-                        return [newBookmark, ...prev]
-                    })
-                } else if (payload.eventType === 'DELETE') {
-                    setBookmarks((prev) => prev.filter((b) => b.id !== payload.old.id))
-                } else if (payload.eventType === 'UPDATE') {
-                    const updated = payload.new as Bookmark
-                    setBookmarks((prev) => prev.map((b) => (b.id === updated.id ? updated : b)))
-                }
+                const newB = payload.new as Bookmark
+                setBookmarks((prev) => {
+                    if (prev.some(b => b.id === newB.id)) return prev
+                    return [newB, ...prev]
+                })
+            })
+            .on('postgres_changes', {
+                event: 'DELETE',
+                schema: 'public',
+                table: 'bookmarks'
+            }, (payload) => {
+                setBookmarks((prev) => prev.filter((b) => b.id !== payload.old.id))
+            })
+            .on('postgres_changes', {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'bookmarks'
+            }, (payload) => {
+                const updated = payload.new as Bookmark
+                setBookmarks((prev) => prev.map((b) => (b.id === updated.id ? updated : b)))
             })
             .subscribe((status) => {
                 console.log('Realtime status:', status)
+                setRealtimeStatus(status === 'SUBSCRIBED' ? 'CONNECTED' : 'DISCONNECTED')
                 if (status === 'SUBSCRIBED') {
-                    // 2. Only fetch initial data AFTER we are listening for changes
                     fetchBookmarks()
                 }
             })
@@ -209,6 +215,12 @@ export default function Dashboard() {
                         <span className="text-xs font-normal text-slate-500 bg-slate-800/50 px-2 py-0.5 rounded-full border border-slate-800">
                             {bookmarks.length}
                         </span>
+                        <div className="flex items-center gap-1.5 ml-2 border border-slate-800 px-2 py-0.5 rounded-full bg-slate-900/50">
+                            <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${realtimeStatus === 'CONNECTED' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-amber-500'}`} />
+                            <span className="text-[10px] uppercase tracking-wider text-slate-500 font-medium">
+                                {realtimeStatus === 'CONNECTED' ? 'Live' : 'Syncing...'}
+                            </span>
+                        </div>
                     </h2>
 
                     {loading ? (
