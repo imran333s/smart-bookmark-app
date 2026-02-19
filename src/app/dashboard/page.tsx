@@ -52,44 +52,58 @@ export default function Dashboard() {
     const [realtimeStatus, setRealtimeStatus] = useState<'CONNECTING' | 'CONNECTED' | 'DISCONNECTED'>('CONNECTING')
 
     useEffect(() => {
-        const channel = supabase
-            .channel('bookmarks-global-sync')
-            .on('postgres_changes', {
-                event: 'INSERT',
-                schema: 'public',
-                table: 'bookmarks'
-            }, (payload) => {
-                const newB = payload.new as Bookmark
-                setBookmarks((prev) => {
-                    if (prev.some(b => b.id === newB.id)) return prev
-                    return [newB, ...prev]
-                })
-            })
-            .on('postgres_changes', {
-                event: 'DELETE',
-                schema: 'public',
-                table: 'bookmarks'
-            }, (payload) => {
-                setBookmarks((prev) => prev.filter((b) => b.id !== payload.old.id))
-            })
-            .on('postgres_changes', {
-                event: 'UPDATE',
-                schema: 'public',
-                table: 'bookmarks'
-            }, (payload) => {
-                const updated = payload.new as Bookmark
-                setBookmarks((prev) => prev.map((b) => (b.id === updated.id ? updated : b)))
-            })
-            .subscribe((status) => {
-                console.log('Realtime status:', status)
-                setRealtimeStatus(status === 'SUBSCRIBED' ? 'CONNECTED' : 'DISCONNECTED')
-                if (status === 'SUBSCRIBED') {
+        let channel: any;
+
+        const setupSubscription = async () => {
+            const { data: { user } } = await supabase.auth.getUser()
+            if (!user) return
+
+            channel = supabase
+                .channel('bookmarks-sync')
+                .on('postgres_changes', {
+                    event: '*',
+                    schema: 'public',
+                    table: 'bookmarks',
+                }, (payload) => {
+                    console.log('Realtime event received:', payload.eventType, payload)
+
+                    // Fallback: Refresh data on any database change
                     fetchBookmarks()
-                }
-            })
+
+                    if (payload.eventType === 'INSERT') {
+                        const newB = payload.new as Bookmark
+                        if (newB && newB.id) {
+                            setBookmarks((prev) => {
+                                if (prev.some(b => b.id === newB.id)) return prev
+                                return [newB, ...prev]
+                            })
+                        }
+                    } else if (payload.eventType === 'DELETE') {
+                        if (payload.old && payload.old.id) {
+                            setBookmarks((prev) => prev.filter((b) => b.id !== payload.old.id))
+                        }
+                    } else if (payload.eventType === 'UPDATE') {
+                        const updated = payload.new as Bookmark
+                        if (updated && updated.id) {
+                            setBookmarks((prev) => prev.map((b) => (b.id === updated.id ? updated : b)))
+                        }
+                    }
+                })
+                .subscribe((status) => {
+                    console.log('Realtime status:', status)
+                    setRealtimeStatus(status === 'SUBSCRIBED' ? 'CONNECTED' : 'DISCONNECTED')
+                    if (status === 'SUBSCRIBED') {
+                        fetchBookmarks()
+                    }
+                })
+        }
+
+        setupSubscription()
 
         return () => {
-            supabase.removeChannel(channel)
+            if (channel) {
+                supabase.removeChannel(channel)
+            }
         }
     }, [supabase, fetchBookmarks])
 
